@@ -71,17 +71,17 @@ jobs:
       - name: Run container health check
         run: |
           docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test
-          # 等端口就绪 (进程启动 + 健康服务Ready, 最多等 30s)
+          # 等健康检查服务就绪 (最多 30s)
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
+            if resp=$(curl -sf http://127.0.0.1:8080/health 2>/dev/null); then
               echo "✅ 健康检查就绪 (${i}s)"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "❌ 健康检查超时"
-              docker logs sm-test
-              exit 1
+              echo "   响应: $resp"
+              docker stop sm-test
+              exit 0
             fi
             sleep 1
           done
+          echo "❌ 健康检查超时，打印容器日志:"
+          docker logs sm-test
           docker stop sm-test
+          exit 1

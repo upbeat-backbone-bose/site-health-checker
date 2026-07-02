@@ -1,5 +1,6 @@
 """
 主循环 - 定时调度 + 状态持久化 + 优雅退出
+架构: 健康服务线程 + 业务检测线程 + 主线程只负责等待退出信号
 """
 
 import os
@@ -9,10 +10,11 @@ import signal
 import json
 import logging
 import threading
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 
-# 全局退出标志
+# ── 全局退出标志 ──────────────────────────────────────────────
 _shutdown = threading.Event()
 
 
@@ -23,11 +25,19 @@ def _handle_signal(signum, frame):
 
 
 signal.signal(signal.SIGINT, _handle_signal)
-signal.signal(signal.SIGTERM, _handle_signal)
+signal.signal(signal.SIGTERM, _signal_handler_placeholder)
+
+
+def _signal_handler_placeholder(signum, frame):
+    _handle_signal(signum, frame)
+
+
+# 重新注册，防止上面覆盖
+signal.signal(2, _handle_signal)
+signal.signal(15, _handle_signal)
 
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
-    """结构化日志配置"""
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -43,7 +53,6 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
 # ════════════════════════════════════════════════════════════
 
 def load_state(state_file: str) -> dict:
-    """从文件加载上次状态 (用于恢复)"""
     try:
         if os.path.exists(state_file):
             with open(state_file) as f:
@@ -54,7 +63,6 @@ def load_state(state_file: str) -> dict:
 
 
 def save_state(state_file: str, results: list):
-    """持久化检测结果"""
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
     try:
         with open(state_file, "w") as f:
@@ -64,6 +72,103 @@ def save_state(state_file: str, results: list):
             }, f, indent=2, default=str)
     except Exception as e:
         logger.warning(f"保存状态文件失败: {e}")
+
+
+# ════════════════════════════════════════════════════════════
+# 健康检查 HTTP 接口 (运行在独立线程)
+# ════════════════════════════════════════════════════════════
+
+def _run_health_server(state_ref: dict, port: int = 8080):
+    """健康检查服务 (在独立线程运行，不受业务循环阻塞影响)"""
+    import http.server
+    import json as _json
+
+    class HealthHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                if self.path == "/health":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    body = _json.dumps({
+                        "status": "ok",
+                        "uptime_seconds": time.time() - state_ref.get("_start_time", time.time()),
+                        "last_check": state_ref.get("last_check", ""),
+                        "results": state_ref.get("results", []),
+                    })
+                    self.wfile.write(body.encode())
+                elif self.path == "/metrics":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.end_headers()
+                    lines = []
+                    for r in state_ref.get("results", []):
+                        site = r.get("name", "unknown").replace(" ", "_")
+                        for ct, cr in r.get("checks", {}).items():
+                            ok = 1 if cr.get("ok") else 0
+                            lat = cr.get("latency_ms", 0)
+                            lines.append(f'site_monitor_check{{site="{site}",type="{ct}"}} {ok}')
+                            lines.append(f'site_monitor_latency_ms{{site="{site}",type="{ct}"}} {lat}')
+                    self.wfile.write("\n".join(lines).encode())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+            except Exception:
+                pass  # 忽略请求处理异常
+
+        def log_message(self, request, client_address, format, *args):
+            pass  # 静默日志
+
+    srv = http.server.HTTPServer(("", port), HealthHandler)
+    logger.info(f"健康检查接口启动: http://0.0.0.0:{port}/health")
+    logger.info(f"Prometheus 指标: http://0.0.0.0:{port}/metrics")
+    srv.serve_forever()
+
+
+def _wait_port(port: int, timeout: float = 30.0) -> bool:
+    """等待端口变为可连接"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
+# ════════════════════════════════════════════════════════════
+# 业务检测循环 (在独立线程运行)
+# ════════════════════════════════════════════════════════════
+
+def _run_monitor_loop(state_ref: dict, check_interval: int, state_file: str):
+    """业务检测主循环 (在独立线程运行，不阻塞健康服务)"""
+    from monitor import check_all
+    from alert import send_alert
+
+    while not _shutdown.is_set():
+        try:
+            results = check_all()
+
+            # 打印摘要
+            print_summary(results)
+
+            # 更新共享状态
+            state_ref["results"] = [r.to_dict() if hasattr(r, "to_dict") else r for r in results]
+            state_ref["last_check"] = datetime.now(timezone.utc).isoformat()
+
+            # 持久化
+            save_state(state_file, results)
+
+            # 告警
+            send_alert(results)
+
+        except Exception as e:
+            logger.error(f"检测循环异常: {type(e).__name__}: {e}", exc_info=True)
+
+        # 在每次循环结束后等待，允许优雅退出检查
+        # 使用短超时以便及时响应 shutdown 信号
+        _shutdown.wait(timeout=check_interval)
 
 
 # ════════════════════════════════════════════════════════════
@@ -81,74 +186,23 @@ def print_summary(results: list):
         icon = "✅" if all_ok else "❌"
         print(f"\n{icon} {status.name}")
         print(f"   {status.url}")
-
         for check_type, result in status.checks.items():
             res_icon = "✅" if result.ok else "❌"
-            print(f"   {res_icon} {check_type.upper()}: {result.message}", end="")
+            line = f"   {res_icon} {check_type.upper()}: {result.message}"
             if result.latency_ms > 0:
-                print(f" ({result.latency_ms:.0f}ms)", end="")
-            print()
+                line += f" ({result.latency_ms:.0f}ms)"
+            print(line)
 
-    failed = [s for s in results if s.checks and not all(r.ok for r in s.checks.values())]
+    failed = [s for s in results if s.get("checks") and not all(r.get("ok", True) for r in s["checks"].values())]
     print("\n" + "-" * 60)
     print(f"总计: {len(results)} 个目标, {len(failed)} 个异常")
     if failed:
-        print(f"❌ 异常: {[s.name for s in failed]}")
+        print(f"❌ 异常: {[s['name'] for s in failed]}")
     print()
 
 
 # ════════════════════════════════════════════════════════════
-# 健康检查接口 (可选 HTTP Server)
-# ════════════════════════════════════════════════════════════
-
-def start_health_server(state_ref: dict, port: int = 8080):
-    """启动轻量健康检查 HTTP Server"""
-    import http.server
-    import json as _json
-
-    class HealthHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path == "/health":
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                body = _json.dumps({
-                    "status": "ok",
-                    "last_check": state_ref.get("last_check", ""),
-                    "results": state_ref.get("results", []),
-                })
-                self.wfile.write(body.encode())
-            elif self.path == "/metrics":
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain")
-                self.end_headers()
-                # Prometheus 格式指标
-                lines = []
-                for r in state_ref.get("results", []):
-                    site_name = r.get("name", "unknown").replace(" ", "_")
-                    for ct, cr in r.get("checks", {}).items():
-                        ok_val = 1 if cr.get("ok") else 0
-                        latency = cr.get("latency_ms", 0)
-                        lines.append(f'site_monitor_check{{site="{site_name}",type="{ct}"}} {ok_val}')
-                        lines.append(f'site_monitor_latency_ms{{site="{site_name}",type="{ct}"}} {latency}')
-                self.wfile.write("\n".join(lines).encode())
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def log_message(self, format, *args):
-            pass  # 静默日志
-
-    srv = http.server.HTTPServer(("", port), HealthHandler)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    logger.info(f"健康检查接口启动: http://0.0.0.0:{port}/health")
-    logger.info(f"Prometheus 指标: http://0.0.0.0:{port}/metrics")
-    return srv
-
-
-# ════════════════════════════════════════════════════════════
-# 主循环
+# 主入口
 # ════════════════════════════════════════════════════════════
 
 def main():
@@ -161,52 +215,33 @@ def main():
     logger.info("Site Monitor 启动")
     logger.info(f"监控目标: {len([s for s in SITES if s.get('enabled', True)])} 个")
     logger.info(f"检测间隔: {config.check_interval}s")
-    logger.info(f"告警: {'启用' if config.alert.enabled else '禁用'}")
     logger.info("=" * 50)
 
-    # 健康检查接口 (在独立线程运行)
-    state_ref: dict = {}
-    health_srv = start_health_server(state_ref, port=8080)
+    # 共享状态 (健康服务和业务线程都读写)
+    state_ref: dict = {
+        "_start_time": time.time(),
+        "results": [],
+        "last_check": "",
+    }
 
-    # 加载上次状态 (恢复用)
-    prev_state = load_state(config.state_file)
+    # ── 启动健康检查服务 (非 daemon 线程, 进程退出依赖它) ──
+    health_thread = threading.Thread(target=_run_health_server, args=(state_ref, 8080), name="health-server")
+    health_thread.start()
 
-    # 等待健康服务就绪，再开始业务检测
-    # 避免主循环崩溃时 daemon 线程来不及响应 /health
-    import socket
-    for _ in range(20):
-        try:
-            with socket.create_connection(("127.0.0.1", 8080), timeout=0.5):
-                break
-        except OSError:
-            time.sleep(0.5)
-    else:
+    # 等待健康服务就绪 (不影响业务线程)
+    if not _wait_port(8080, timeout=10.0):
         logger.warning("健康检查服务启动超时，继续运行")
 
-    logger.info("开始检测...")
+    # ── 启动业务检测线程 ──────────────────────────────────────
+    monitor_thread = threading.Thread(
+        target=_run_monitor_loop,
+        args=(state_ref, config.check_interval, config.state_file),
+        name="monitor-loop",
+        daemon=False,  # 非 daemon，主循环结束后进程继续运行（等健康服务）
+    )
+    monitor_thread.start()
 
-    while not _shutdown.is_set():
-        try:
-            from monitor import check_all
-
-            results = check_all()
-            print_summary(results)
-
-            # 更新共享状态 (健康检查接口用)
-            state_ref["results"] = [r.to_dict() if hasattr(r, "to_dict") else r for r in results]
-            state_ref["last_check"] = datetime.now(timezone.utc).isoformat()
-
-            # 持久化
-            save_state(config.state_file, results)
-
-            # 告警
-            from alert import send_alert
-            send_alert(results)
-
-        except Exception as e:
-            logger.error(f"检测循环异常: {type(e).__name__}: {e}", exc_info=True)
-
-        # 等待下次检测或退出信号
-        _shutdown.wait(timeout=config.check_interval)
+    # ── 主线程: 只负责等待退出信号 ──────────────────────────
+    _shutdown.wait()
 
     logger.info("Site Monitor 已停止")
