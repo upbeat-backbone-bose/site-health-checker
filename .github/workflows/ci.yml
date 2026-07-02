@@ -13,7 +13,7 @@ env:
 jobs:
   # ── Python 测试 ───────────────────────────────────────────
   test:
-    name: Test (Python ${{ env.PYTHON_VERSION }})
+    name: Test (Python 3.12)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
