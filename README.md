@@ -166,6 +166,29 @@ site-monitor/
 
 ---
 
+## 测试
+
+```bash
+# 运行全部测试 (51 个用例)
+pip install pytest
+pytest tests/ -v
+
+# 覆盖率报告
+pytest tests/ -v --cov=. --cov-report=term-missing
+```
+
+**测试覆盖模块:**
+
+| 模块 | 覆盖内容 | 用例数 |
+|------|---------|--------|
+| `test_monitor.py` | URL 解析、数据结构、CDN 指纹、证书过期计算 | 24 |
+| `test_alert.py` | 防抖逻辑、消息构建、告警聚合 | 14 |
+| `test_loop.py` | 状态持久化、摘要输出、配置校验 | 13 |
+
+> ⚠️ 网络相关测试 (L4/L7/Cert/CDN/Docker Socket 真实调用) 需要完整依赖 + 网络环境，在 Docker 容器内运行更准确。
+
+---
+
 ## 常见问题
 
 **Q: 容器无法访问宿主机 Docker Socket?**

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Data / State (生产数据不提交)
+data/
+*.json
+!config.example.json
+
+# Env
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+.docker/
+
+# Misc
+*.log
+.DS_Store
