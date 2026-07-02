@@ -16,11 +16,16 @@ from typing import Optional
 
 # ── 全局退出标志 ──────────────────────────────────────────────
 _shutdown = threading.Event()
+logger: Optional[logging.Logger] = None  # 延迟到 setup_logging() 初始化
 
 
 def _handle_signal(signum, frame):
     sig_name = {2: "SIGINT", 15: "SIGTERM"}.get(signum, str(signum))
-    logger.info(f"收到 {sig_name}, 优雅退出中...")
+    if logger:
+        logger.info(f"收到 {sig_name}, 优雅退出中...")
+    else:
+        # logger 还未初始化时, 直接退
+        print(f"收到 {sig_name}, 退出中...", file=sys.stderr, flush=True)
     _shutdown.set()
 
 
@@ -199,7 +204,15 @@ def print_summary(results: list):
 def main():
     global logger
 
+    # ── 诊断输出 (stderr, 无缓冲) ─────────────────────────
+    import sys
+    def _diag(msg):
+        sys.stderr.write(f"[MAIN] {msg}\n")
+        sys.stderr.flush()
+
+    _diag("loading config...")
     from config import config, SITES
+    _diag(f"config loaded, {len(SITES)} sites")
 
     logger = setup_logging(config.log_level)
     logger.info("=" * 50)
@@ -208,6 +221,7 @@ def main():
     logger.info(f"检测间隔: {config.check_interval}s")
     logger.info("=" * 50)
 
+    _diag("creating state_ref...")
     # 共享状态 (健康服务和业务线程都读写)
     state_ref: dict = {
         "_start_time": time.time(),
@@ -215,24 +229,31 @@ def main():
         "last_check": "",
     }
 
+    _diag("starting health server thread...")
     # ── 启动健康检查服务 (非 daemon 线程, 进程退出依赖它) ──
     health_thread = threading.Thread(target=_run_health_server, args=(state_ref, 8080), name="health-server")
     health_thread.start()
 
+    _diag("waiting for health server port...")
     # 等待健康服务就绪 (不影响业务线程)
-    if not _wait_port(8080, timeout=10.0):
+    port_ready = _wait_port(8080, timeout=10.0)
+    _diag(f"port ready: {port_ready}")
+
+    if not port_ready:
         logger.warning("健康检查服务启动超时，继续运行")
 
+    _diag("starting monitor thread...")
     # ── 启动业务检测线程 ──────────────────────────────────────
     monitor_thread = threading.Thread(
         target=_run_monitor_loop,
         args=(state_ref, config.check_interval, config.state_file),
         name="monitor-loop",
-        daemon=False,  # 非 daemon，主循环结束后进程继续运行（等健康服务）
+        daemon=False,
     )
     monitor_thread.start()
+    _diag("monitor thread started, entering wait loop")
 
     # ── 主线程: 只负责等待退出信号 ──────────────────────────
     _shutdown.wait()
-
+    _diag("shutdown signal received")
     logger.info("Site Monitor 已停止")
