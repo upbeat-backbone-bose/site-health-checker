@@ -70,19 +70,50 @@ jobs:
 
       - name: Run container health check
         run: |
-          # 先检查端口是否已被占用
-          if ss -tlnp 2>/dev/null | grep -q ':8080'; then
-            echo "⚠️  端口 8080 已被占用，尝试清理..."
-            fuser -k 8080/tcp 2>/dev/null || true
-            sleep 2
+          # 1. 先用 echo 验证镜像 + 容器机制是否正常
+          echo "=== [Step 1] 镜像基础测试 ==="
+          docker run --rm --name smoke-test busybox echo "IMAGING_OK" || { echo "❌ 镜像拉取失败"; exit 1; }
+
+          # 2. 验证容器网络 + 端口映射是否正常
+          echo "=== [Step 2] 端口映射测试 ==="
+          docker run -d --name port-test -p 127.0.0.1:8080:80 --rm busybox httpd -f
+          sleep 2
+          if curl -sf http://127.0.0.1:8080/ > /dev/null 2>&1; then
+            echo "✅ 端口映射正常"
+          else
+            echo "❌ 端口映射失败"
+            exit 1
           fi
+          docker stop port-test 2>/dev/null || true
 
-          # 启动容器
+          # 3. 测试 Python 镜像本身能否运行
+          echo "=== [Step 3] Python 运行时测试 ==="
+          docker run --rm site-monitor:test python3 -c "import sys; print('PYTHON_OK', flush=True); sys.exit(0)"
+          echo "   Python 运行时: OK"
+
+          # 4. 测试 loop.py 能否导入 (不启动服务)
+          echo "=== [Step 4] 模块导入测试 ==="
+          docker run --rm site-monitor:test python3 -u -c "
+import sys
+sys.path.insert(0, '/app')
+sys.stderr.write('Starting imports...\\n'); sys.stderr.flush()
+try:
+    import config
+    sys.stderr.write('config imported\\n'); sys.stderr.flush()
+    import monitor
+    sys.stderr.write('monitor imported\\n'); sys.stderr.flush()
+    import alert
+    sys.stderr.write('alert imported\\n'); sys.stderr.flush()
+    sys.stderr.write('ALL_IMPORTS_OK\\n'); sys.stderr.flush()
+except Exception as e:
+    sys.stderr.write('IMPORT_ERROR: %s\\n' % e); sys.stderr.flush()
+    sys.exit(1)
+" 2>&1
+
+          # 5. 启动服务并等待健康检查
+          echo "=== [Step 5] 服务启动测试 ==="
           docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test 2>&1
-          CONTAINER_ID=$(docker ps -lq --format "{{.ID}}")
-          echo "容器ID: $CONTAINER_ID"
-
-          # 等健康检查服务就绪 (最多 30s)
+          echo "容器已启动，等待健康检查..."
           for i in $(seq 1 30); do
             if resp=$(curl -sf http://127.0.0.1:8080/health 2>/dev/null); then
               echo "✅ 健康检查就绪 (${i}s)"
@@ -90,14 +121,13 @@ jobs:
               docker stop sm-test
               exit 0
             fi
-            # 每 5 秒打印容器日志用于诊断
             if [ $((i % 5)) -eq 0 ]; then
-              echo "   [${i}s] 容器状态: $(docker inspect -f '{{.State.Status}}' sm-test 2>/dev/null || echo 'unknown')"
+              echo "   [${i}s] 容器状态: $(docker inspect -f '{{.State.Status}}' sm-test 2>/dev/null || echo 'gone')"
+              docker logs sm-test 2>&1 | tail -5 || true
             fi
             sleep 1
           done
-
-          echo "❌ 健康检查超时，打印容器日志:"
+          echo "❌ 健康检查超时"
           docker logs sm-test 2>&1
           docker inspect sm-test --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}' 2>&1
           docker stop sm-test 2>/dev/null
