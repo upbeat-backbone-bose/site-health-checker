@@ -164,12 +164,24 @@ def main():
     logger.info(f"告警: {'启用' if config.alert.enabled else '禁用'}")
     logger.info("=" * 50)
 
-    # 健康检查接口
+    # 健康检查接口 (在独立线程运行)
     state_ref: dict = {}
     health_srv = start_health_server(state_ref, port=8080)
 
     # 加载上次状态 (恢复用)
     prev_state = load_state(config.state_file)
+
+    # 等待健康服务就绪，再开始业务检测
+    # 避免主循环崩溃时 daemon 线程来不及响应 /health
+    import socket
+    for _ in range(20):
+        try:
+            with socket.create_connection(("127.0.0.1", 8080), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        logger.warning("健康检查服务启动超时，继续运行")
 
     logger.info("开始检测...")
 
