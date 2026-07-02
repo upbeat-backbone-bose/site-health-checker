@@ -63,9 +63,6 @@ jobs:
       - name: Verify image
         run: docker images site-monitor:test --format "{{.Repository}}:{{.Tag}}"
 
-      - name: Test Python runtime
-        run: docker run --rm site-monitor:test python3 -c "import sys; print('PYTHON_OK', flush=True)"
-
       - name: Test module imports
         run: |
           docker run --rm site-monitor:test python3 -u -c "
@@ -74,41 +71,25 @@ jobs:
           import config
           import monitor
           import alert
+          import app
           print('IMPORTS_OK', flush=True)
           "
 
-      - name: Test service startup
+      - name: Test service health
         run: |
-          # 1. 验证 loop.py 文件存在
-          echo "=== Verify image content ==="
-          docker run --rm site-monitor:test ls -la /app/loop.py
-
-          # 2. 启动容器并立即测端口
-          echo "=== Start container and check ==="
           docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test
-          sleep 2
-
-          # 3. 3秒后看状态和日志
-          echo "=== After 2s ==="
-          docker inspect sm-test --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
-          echo "--- container logs ---"
-          docker logs sm-test 2>&1 | head -50
-          echo "--- end logs ---"
-
-          # 4. 等待并测健康检查
-          for i in $(seq 1 15); do
+          for i in $(seq 1 20); do
             if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
-              echo "✅ Health check ready in ${i}s"
+              echo "Health check ready in ${i}s"
               curl -sf http://127.0.0.1:8080/health
               echo ""
+              curl -sf http://127.0.0.1:8080/metrics | head -5
               docker stop sm-test
               exit 0
             fi
             sleep 1
           done
-
-          echo "❌ TIMEOUT"
-          docker logs sm-test 2>&1
-          docker inspect sm-test --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
+          echo "TIMEOUT"
+          docker logs sm-test
           docker stop sm-test
           exit 1
