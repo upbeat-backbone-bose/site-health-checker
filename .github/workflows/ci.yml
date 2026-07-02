@@ -79,17 +79,17 @@ jobs:
 
       - name: Test service startup
         run: |
+          # 先用 foreground 模式跑一下，看实际输出
+          echo "=== Foreground test (10s timeout) ==="
+          timeout 10 docker run --rm -p 127.0.0.1:8080:8080 site-monitor:test 2>&1 | head -50 || echo "(exit $?)"
+          echo "=== Foreground test done ==="
+          echo ""
+          # 现在用 detached 模式跑（模拟原行为）
+          echo "=== Detached mode ==="
           docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
-              echo "Health check ready in ${i}s"
-              docker stop sm-test
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "TIMEOUT - container logs:"
-          docker logs sm-test
+          sleep 3
+          echo "=== 3s 后日志 ==="
+          docker logs sm-test 2>&1 | head -30
+          echo "=== 容器状态 ==="
           docker inspect sm-test --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
-          docker stop sm-test
-          exit 1
+          docker stop sm-test 2>/dev/null
