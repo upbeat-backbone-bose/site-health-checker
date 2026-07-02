@@ -63,20 +63,30 @@ jobs:
       - name: "Step 1: 镜像基础测试 (busybox echo)"
         run: docker run --rm --name smoke-test busybox echo "IMAGING_OK"
 
-      - name: "Step 2: Python 运行时 + 模块导入测试"
+      - name: "Step 2: 模块导入测试 (imports + flush)"
         run: |
           docker run --rm site-monitor:test python3 -u -c "
-import sys; sys.stderr.write('=== PYTHON OK ===\n'); sys.stderr.flush()
+import sys
+sys.stderr.write('=== PYTHON OK ===\n'); sys.stderr.flush()
 sys.path.insert(0, '/app')
 sys.stderr.write('importing config...\n'); sys.stderr.flush()
-import config; sys.stderr.write('config OK, sites=%d\n' % len(config.SITES)); sys.stderr.flush()
+import config; sys.stderr.write('config OK\n'); sys.stderr.flush()
 import monitor; sys.stderr.write('monitor OK\n'); sys.stderr.flush()
 import alert; sys.stderr.write('alert OK\n'); sys.stderr.flush()
 sys.stderr.write('=== ALL IMPORTS DONE ===\n'); sys.stderr.flush()
 "
-        continue-on-error: true
 
-      - name: "Step 3: 启动服务并等待健康检查"
+      - name: "Step 3: 启动并立即打印日志 (诊断 0 输出问题)"
+        run: |
+          docker run -d --name sm-diag -p 127.0.0.1:8080:8080 site-monitor:test
+          sleep 3
+          echo "=== 容器日志 ==="
+          docker logs sm-diag 2>&1
+          echo "=== 容器状态 ==="
+          docker inspect sm-diag --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
+          docker stop sm-diag
+
+      - name: "Step 4: 启动服务并等待健康检查"
         run: |
           docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test
           for i in $(seq 1 30); do
@@ -88,7 +98,7 @@ sys.stderr.write('=== ALL IMPORTS DONE ===\n'); sys.stderr.flush()
             sleep 1
           done
           echo "健康检查超时，打印容器日志:"
-          docker logs sm-test
+          docker logs sm-test 2>&1
           docker inspect sm-test --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
           docker stop sm-test
           exit 1
