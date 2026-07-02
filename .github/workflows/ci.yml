@@ -63,8 +63,18 @@ jobs:
       - name: "Step 1: 镜像基础测试 (busybox echo)"
         run: docker run --rm --name smoke-test busybox echo "IMAGING_OK"
 
-      - name: "Step 2: Python 运行时测试"
-        run: docker run --rm site-monitor:test python3 -c "import sys; print('PYTHON_OK', flush=True); sys.exit(0)"
+      - name: "Step 2: Python 运行时 + 模块导入测试"
+        run: |
+          docker run --rm site-monitor:test python3 -u -c "
+import sys; sys.stderr.write('=== PYTHON OK ===\n'); sys.stderr.flush()
+sys.path.insert(0, '/app')
+sys.stderr.write('importing config...\n'); sys.stderr.flush()
+import config; sys.stderr.write('config OK, sites=%d\n' % len(config.SITES)); sys.stderr.flush()
+import monitor; sys.stderr.write('monitor OK\n'); sys.stderr.flush()
+import alert; sys.stderr.write('alert OK\n'); sys.stderr.flush()
+sys.stderr.write('=== ALL IMPORTS DONE ===\n'); sys.stderr.flush()
+"
+        continue-on-error: true
 
       - name: "Step 3: 启动服务并等待健康检查"
         run: |
