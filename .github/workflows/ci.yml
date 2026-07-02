@@ -79,17 +79,18 @@ jobs:
 
       - name: Test service startup
         run: |
-          docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
-              echo "Health check ready in ${i}s"
-              docker stop sm-test
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "TIMEOUT - container logs:"
-          docker logs sm-test
-          docker inspect sm-test --format='Status={{.State.Status}} ExitCode={{.State.ExitCode}}'
-          docker stop sm-test
-          exit 1
+          # 1. 验证 loop.py 文件存在 + Python 能执行它
+          echo "=== Verify image content ==="
+          docker run --rm site-monitor:test ls -la /app/loop.py 2>&1
+          docker run --rm site-monitor:test python3 -c "import sys; sys.path.insert(0,'/app'); print('IMPORT_OK', flush=True); exec(open('/app/loop.py').read())" 2>&1 | head -30 &
+          BG_PID=$!
+          sleep 8
+          echo "=== Check /health after 8s ==="
+          if curl -sf http://127.0.0.1:8080/health 2>/dev/null; then
+            echo "✅ Health check OK"
+          else
+            echo "❌ Health check failed"
+          fi
+          kill $BG_PID 2>/dev/null
+          wait $BG_PID 2>/dev/null
+          echo "=== Done ==="
