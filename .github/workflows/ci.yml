@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: "3.12"
@@ -60,33 +63,26 @@ jobs:
       - name: Verify image
         run: docker images site-monitor:test --format "{{.Repository}}:{{.Tag}}"
 
-      - name: Test1 - Python runtime
-        run: docker run --rm site-monitor:test python3 -c "import sys; print('PY_OK', flush=True)"
+      - name: Test Python runtime
+        run: docker run --rm site-monitor:test python3 -c "import sys; print('PYTHON_OK', flush=True)"
 
-      - name: Test2 - Module imports
+      - name: Test module imports
         run: |
           docker run --rm site-monitor:test python3 -u -c "
-import sys
-sys.stderr.write('===START===\n'); sys.stderr.flush()
-sys.path.insert(0, '/app')
-sys.stderr.write('import config...'); sys.stderr.flush()
-import config
-sys.stderr.write('OK\n'); sys.stderr.flush()
-sys.stderr.write('import monitor...'); sys.stderr.flush()
-import monitor
-sys.stderr.write('OK\n'); sys.stderr.flush()
-sys.stderr.write('import alert...'); sys.stderr.flush()
-import alert
-sys.stderr.write('OK\n'); sys.stderr.flush()
-sys.stderr.write('===DONE===\n'); sys.stderr.flush()
-"
+          import sys
+          sys.path.insert(0, '/app')
+          import config
+          import monitor
+          import alert
+          print('IMPORTS_OK', flush=True)
+          "
 
-      - name: Test3 - Service startup
+      - name: Test service startup
         run: |
           docker run -d --name sm-test -p 127.0.0.1:8080:8080 site-monitor:test
           for i in $(seq 1 30); do
-            if resp=$(curl -sf http://127.0.0.1:8080/health 2>/dev/null); then
-              echo "Health check ready (${i}s): $resp"
+            if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
+              echo "Health check ready in ${i}s"
               docker stop sm-test
               exit 0
             fi
