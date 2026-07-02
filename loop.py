@@ -25,16 +25,7 @@ def _handle_signal(signum, frame):
 
 
 signal.signal(signal.SIGINT, _handle_signal)
-signal.signal(signal.SIGTERM, _signal_handler_placeholder)
-
-
-def _signal_handler_placeholder(signum, frame):
-    _handle_signal(signum, frame)
-
-
-# 重新注册，防止上面覆盖
-signal.signal(2, _handle_signal)
-signal.signal(15, _handle_signal)
+signal.signal(signal.SIGTERM, _handle_signal)
 
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
