@@ -60,8 +60,7 @@ def _monitor_loop():
                 _state["results"] = [r.to_dict() if hasattr(r, "to_dict") else r for r in results]
                 _state["last_check"] = datetime.now(timezone.utc).isoformat()
 
-            # 持久化 + 告警
-            from loop import save_state
+            # 持久化 + 告警 (save_state 已在 app.py 中定义)
             save_state(config.state_file, results)
             send_alert(results)
 

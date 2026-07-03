@@ -16,6 +16,12 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 import httpx
 
+# httpx 0.27+ 才有 TLSError, 低版本用 RequestError fallback
+try:
+    _HTTPX_TLS_ERROR = httpx.TLSError
+except AttributeError:
+    _HTTPX_TLS_ERROR = httpx.RequestError
+
 from config import config, SITES
 
 logger = logging.getLogger("monitor")
@@ -188,7 +194,7 @@ def check_l7(url: str, site_cfg: dict) -> CheckResult:
     except httpx.TimeoutException:
         return CheckResult(site_name="", check_type="l7", ok=False,
             message=f"HTTP 请求超时 ({config.l7.request_timeout}s)", latency_ms=(time.perf_counter()-start)*1000)
-    except httpx.TLSError as e:
+    except _HTTPX_TLS_ERROR as e:
         return CheckResult(site_name="", check_type="l7", ok=False,
             message=f"TLS 错误: {e}", latency_ms=(time.perf_counter()-start)*1000)
     except Exception as e:

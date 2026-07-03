@@ -1,14 +1,16 @@
 """
 配置中心 - 所有可变参数集中管理
 生产环境: 修改此文件即可，不要碰业务逻辑
+使用 dataclass + 简单校验, 无 pydantic 依赖 (便于测试环境运行)
 """
 
-from typing import Optional
-from pydantic import BaseModel
+from typing import Optional, List
+from dataclasses import dataclass, field
 
 
 # ── 告警配置 ──────────────────────────────────────────────
-class AlertConfig(BaseModel):
+@dataclass
+class AlertConfig:
     """告警 Webhook 配置"""
     enabled: bool = True
     dingtalk_url: Optional[str] = None       # 钉钉机器人 Webhook
@@ -22,26 +24,29 @@ class AlertConfig(BaseModel):
 
 
 # ── L4 TCP 检测配置 ───────────────────────────────────────
-class L4Config(BaseModel):
+@dataclass
+class L4Config:
     """TCP 连通性检测"""
     connect_timeout: float = 5.0             # TCP 连接超时 (秒)
     read_timeout: float = 3.0                # 读取超时 (秒)
 
 
 # ── L7 HTTP 检测配置 ─────────────────────────────────────
-class L7Config(BaseModel):
+@dataclass
+class L7Config:
     """HTTP 七层检测"""
     request_timeout: float = 10.0            # 请求总超时
     follow_redirects: bool = True
-    expected_status_codes: list[int] = [200, 201, 204]
+    expected_status_codes: List[int] = field(default_factory=lambda: [200, 201, 204])
     # 关键词检测: 响应 Body 包含这些关键词才认为正常
-    expected_keywords: list[str] = []
+    expected_keywords: List[str] = field(default_factory=list)
     # 响应时间阈值 (毫秒), 超过视为慢
     slow_threshold_ms: int = 2000
 
 
 # ── 证书检测配置 ──────────────────────────────────────────
-class CertConfig(BaseModel):
+@dataclass
+class CertConfig:
     """TLS 证书检测"""
     check_validity: bool = True              # 检测过期
     warn_days: int = 30                      # 提前 N 天预警
@@ -51,16 +56,18 @@ class CertConfig(BaseModel):
 
 
 # ── Docker Socket 配置 ────────────────────────────────────
-class DockerConfig(BaseModel):
+@dataclass
+class DockerConfig:
     """Docker Socket 检测"""
     enabled: bool = True
     socket_path: str = "/var/run/docker.sock"
     # 要监控的容器名/ID (留空则监控所有)
-    watch_containers: list[str] = []
+    watch_containers: List[str] = field(default_factory=list)
 
 
 # ── 全局配置 ──────────────────────────────────────────────
-class Config(BaseModel):
+@dataclass
+class Config:
     check_interval: int = 60                # 检测间隔 (秒)
     log_level: str = "INFO"                  # DEBUG/INFO/WARNING/ERROR
 
@@ -68,13 +75,13 @@ class Config(BaseModel):
     state_file: str = "/data/state.json"    # 状态文件 (Docker volume 挂载)
 
     # 告警
-    alert: AlertConfig = AlertConfig()
+    alert: AlertConfig = field(default_factory=AlertConfig)
 
     # 各检测模块
-    l4: L4Config = L4Config()
-    l7: L7Config = L7Config()
-    cert: CertConfig = CertConfig()
-    docker: DockerConfig = DockerConfig()
+    l4: L4Config = field(default_factory=L4Config)
+    l7: L7Config = field(default_factory=L7Config)
+    cert: CertConfig = field(default_factory=CertConfig)
+    docker: DockerConfig = field(default_factory=DockerConfig)
 
 
 # ── 监控目标定义 ──────────────────────────────────────────
