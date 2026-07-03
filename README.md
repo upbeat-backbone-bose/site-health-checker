@@ -2,7 +2,10 @@
 
 [![CI](https://github.com/upbeat-backbone-bose/site-health-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/upbeat-backbone-bose/site-health-checker/actions/workflows/ci.yml)
 [![Release](https://github.com/upbeat-backbone-bose/site-health-checker/actions/workflows/release.yml/badge.svg)](https://github.com/upbeat-backbone-bose/site-health-checker/releases)
+[![Sync README](https://github.com/upbeat-backbone-bose/site-health-checker/actions/workflows/sync-readme.yml/badge.svg)](https://github.com/upbeat-backbone-bose/site-health-checker/actions/workflows/sync-readme.yml)
 [![codecov](https://codecov.io/gh/upbeat-backbone-bose/site-health-checker/branch/main/graph/badge.svg)](https://codecov.io/gh/upbeat-backbone-bose/site-health-checker)
+[![Version](https://img.shields.io/badge/version-v1.1.1-blue)](https://github.com/upbeat-backbone-bose/site-health-checker/releases/tag/v1.1.1)
+[![Docker Pulls](https://img.shields.io/badge/docker-pulls-ghcr.io%2Fupbeat--backbone--bose%2Fsite--health--checker-blue)](https://github.com/upbeat-backbone-bose/site-health-checker/pkgs/container/site-health-checker)
 
 **支持 L4/L7 HTTP 检测、证书检测、CDN 识别、Docker 容器状态监控。基于 Flask + Gunicorn (参考 prometheus/*_exporter 架构) 构建。**
 
