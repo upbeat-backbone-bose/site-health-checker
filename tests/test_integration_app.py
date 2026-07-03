@@ -542,3 +542,116 @@ class TestConfigSchema:
         for site in SITES:
             assert "name" in site, f"Site missing 'name': {site}"
             assert "checks" in site, f"Site '{site.get('name')}' missing 'checks'"
+
+
+class TestMonitorLoopRealSiteStatus:
+    """回归测试: monitor_loop 必须能处理 SiteStatus 对象 (不是 dict)
+
+    历史上 crash: AttributeError: 'SiteStatus' object has no attribute 'get'
+    详见: app.py _monitor_loop 的 failed 计算逻辑
+    """
+
+    def test_loop_handles_real_sitestatus_objects(self):
+        """用真实的 SiteStatus 对象 (来自 monitor.check_all) 跑 _monitor_loop, 不应崩溃"""
+        from app import _monitor_loop
+        from monitor import SiteStatus, CheckResult
+
+        # 构造真实 SiteStatus 对象 (模拟 check_all 返回)
+        site_ok = SiteStatus(
+            name="Healthy Site",
+            url="https://healthy.com",
+            checks={
+                "l7": CheckResult(site_name="Healthy Site", check_type="l7", ok=True, message="OK", latency_ms=50.0),
+            },
+        )
+        site_fail = SiteStatus(
+            name="Failed Site",
+            url="https://failed.com",
+            checks={
+                "l7": CheckResult(site_name="Failed Site", check_type="l7", ok=False, message="Timeout", latency_ms=0),
+            },
+        )
+
+        with patch('app.check_all') as mock_check, \
+             patch('app.send_alert') as mock_alert, \
+             patch('app.save_state') as mock_save, \
+             patch('app.time.sleep') as mock_sleep:
+
+            mock_check.return_value = [site_ok, site_fail]
+
+            def stop_loop(*args):
+                raise KeyboardInterrupt()
+            mock_sleep.side_effect = stop_loop
+
+            # 关键断言: 不抛 AttributeError
+            try:
+                _monitor_loop()
+            except KeyboardInterrupt:
+                pass
+            except AttributeError as e:
+                if "'SiteStatus' object has no attribute 'get'" in str(e):
+                    pytest.fail(f"regression: _monitor_loop 不能用 dict 风格访问 SiteStatus: {e}")
+                raise
+
+            # 验证 _state 正确更新
+            from app import _state
+            assert len(_state["results"]) == 2
+            assert _state["last_check"] != ""
+
+    def test_loop_handles_empty_checks(self):
+        """SiteStatus.checks 为空时不应崩"""
+        from app import _monitor_loop
+        from monitor import SiteStatus
+
+        site_empty = SiteStatus(name="Empty", url="https://empty.com", checks={})
+
+        with patch('app.check_all') as mock_check, \
+             patch('app.send_alert') as mock_alert, \
+             patch('app.save_state') as mock_save, \
+             patch('app.time.sleep') as mock_sleep:
+
+            mock_check.return_value = [site_empty]
+            mock_sleep.side_effect = KeyboardInterrupt()
+
+            try:
+                _monitor_loop()
+            except KeyboardInterrupt:
+                pass
+            except AttributeError as e:
+                if "'SiteStatus' object has no attribute 'get'" in str(e):
+                    pytest.fail(f"regression: empty SiteStatus crash: {e}")
+                raise
+
+    def test_loop_handles_mixed_objects_and_dicts(self):
+        """_monitor_loop 应该兼容 SiteStatus 对象和 dict 两种类型 (to_dict 兜底)"""
+        from app import _monitor_loop
+        from monitor import SiteStatus, CheckResult
+
+        # 混合: 一个 SiteStatus 对象 + 一个 dict
+        site_obj = SiteStatus(
+            name="Object",
+            url="https://obj.com",
+            checks={"l7": CheckResult("Object", "l7", True, "OK", 10)},
+        )
+        site_dict = {
+            "name": "Dict",
+            "url": "https://dict.com",
+            "checks": {"l7": {"ok": True, "message": "OK", "latency_ms": 10}},
+        }
+
+        with patch('app.check_all') as mock_check, \
+             patch('app.send_alert'), \
+             patch('app.save_state'), \
+             patch('app.time.sleep') as mock_sleep:
+
+            mock_check.return_value = [site_obj, site_dict]
+            mock_sleep.side_effect = KeyboardInterrupt()
+
+            try:
+                _monitor_loop()
+            except KeyboardInterrupt:
+                pass
+            except AttributeError as e:
+                if "no attribute 'get'" in str(e):
+                    pytest.fail(f"mixed types not handled: {e}")
+                raise

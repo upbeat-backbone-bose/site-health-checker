@@ -65,10 +65,17 @@ def _monitor_loop():
             send_alert(results)
 
             # 摘要输出 (INFO 级)
-            failed = [r for r in results if r.get("checks") and not all(c.get("ok", True) for c in r["checks"].values())]
+            # r 可能是 SiteStatus 对象或 dict, 统一用 to_dict() 处理
+            failed = []
+            for r in results:
+                # 统一转 dict
+                r_dict = r.to_dict() if hasattr(r, "to_dict") else r
+                checks = r_dict.get("checks", {}) or {}
+                if checks and not all(c.get("ok", True) for c in checks.values()):
+                    failed.append(r_dict)
             logger.info(f"检测完成: {len(results)} 个目标, {len(failed)} 个异常")
             if failed:
-                logger.warning(f"异常目标: {[r['name'] for r in failed]}")
+                logger.warning(f"异常目标: {[f['name'] for f in failed]}")
 
         except Exception as e:
             logger.error(f"检测循环异常: {type(e).__name__}: {e}", exc_info=True)
