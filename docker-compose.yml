@@ -21,8 +21,11 @@ services:
 
     # ── Docker Socket 挂载 (可选, 用于容器状态检测) ──────────
     # 如果不需要监控宿主机上的其他容器, 可以注释掉这行
+    #
+    # 注意: 不要 bind mount ./config.py 覆盖容器内 /app/config.py
+    #       历史上因此触发 ImportError (见 CI Test module imports 步骤)
+    #       如需自定义配置, 改用环境变量 / env_file 注入, 详见 README
     volumes:
-      - ./config.py:/app/config.py:ro        # 配置文件 (只读)
       - ./data:/data                         # 状态持久化
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker Socket (只读)
 

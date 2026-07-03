@@ -64,15 +64,20 @@ jobs:
         run: docker images site-monitor:test --format "{{.Repository}}:{{.Tag}}"
 
       - name: Test module imports
+        # 回归保护: 必须验证具体导出名 (config / SITES)
+        # 仅 import config 不够 — 历史上因为 docker-compose bind mount 覆盖
+        # /app/config.py 导致运行时 'from config import config, SITES' 失败
+        # 详见: docker-compose.yml volumes 注释
         run: |
           docker run --rm site-monitor:test python3 -u -c "
-          import sys
-          sys.path.insert(0, '/app')
-          import config
-          import monitor
-          import alert
-          import app
-          print('IMPORTS_OK', flush=True)
+          from config import config, SITES
+          from monitor import check_all, CheckResult, SiteStatus
+          from alert import send_alert, AlertState
+          from app import app
+          assert hasattr(config, 'alert'), 'config.alert 缺失'
+          assert hasattr(config, 'l7'), 'config.l7 缺失'
+          assert len(SITES) >= 1, 'SITES 为空'
+          print(f'IMPORTS_OK sites={len(SITES)}', flush=True)
           "
 
       - name: Test service health

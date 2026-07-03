@@ -58,6 +58,43 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Smoke test published image
+        # 回归保护: 历史上曾发布过 'from config import config, SITES' 失败的镜像
+        # 此步骤在 push 后于 amd64 镜像上验证: 1) 关键导出 2) gunicorn 启动 3) /health 端点
+        if: success()
+        run: |
+          # 取第一个 tag (semver 全版本) 作为 smoke test 目标
+          PRIMARY_TAG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          docker pull "$PRIMARY_TAG"
+
+          # 1) 导入链 + 导出名验证
+          docker run --rm "$PRIMARY_TAG" python3 -u -c "
+          from config import config, SITES
+          from monitor import check_all
+          from alert import send_alert
+          from app import app
+          assert len(SITES) >= 1, 'SITES 为空'
+          print('IMPORT_OK sites=' + str(len(SITES)), flush=True)
+          "
+
+          # 2) 真实启动 gunicorn, 验证 /health 端点可响应
+          docker run -d --name sm-release-test -p 127.0.0.1:8081:8080 "$PRIMARY_TAG"
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8081/health > /dev/null 2>&1; then
+              echo "Health endpoint ready in ${i}s"
+              curl -sf http://127.0.0.1:8081/health
+              echo ""
+              docker rm -f sm-release-test > /dev/null
+              echo "SMOKE_TEST_OK"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "SMOKE_TEST_FAILED: /health did not respond in 30s"
+          docker logs sm-release-test
+          docker rm -f sm-release-test > /dev/null
+          exit 1
+
   release:
     name: Create GitHub Release
     needs: build-and-push
